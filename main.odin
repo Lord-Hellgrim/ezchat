@@ -18,8 +18,6 @@ main :: proc() {
         fmt.println(sdl3.GetError())
     }
 
-    
-    
     count : c.int
     cameras := sdl3.GetCameras(&count)
     specs := sdl3.GetCameraSupportedFormats(cameras[0], &count)
@@ -34,7 +32,10 @@ main :: proc() {
     }
 
     camera_permission := sdl3.GetCameraPermissionState(camera)
-    fmt.println(camera_permission)
+    if camera_permission != .APPROVED {
+        fmt.println("Denied access to camera")
+        return
+    }
 
     actual_spec : sdl3.CameraSpec 
     sdl3.GetCameraFormat(camera, &actual_spec)
@@ -54,18 +55,12 @@ main :: proc() {
     for {
         event : sdl3.Event
         event_polled := sdl3.PollEvent(&event)
-        sdl3.PumpEvents()
         
         if event.type == .QUIT {
             return
         }
         
         frame := sdl3.AcquireCameraFrame(camera, &timestamp)
-        if frame != nil {
-            fmt.println("frame.w: ", frame.w)
-            fmt.println("frame.h: ", frame.h)
-            fmt.println("frame.format: ", frame.format)
-        }
         
         sdl3.Delay(10)
         if frame == nil {
@@ -73,10 +68,6 @@ main :: proc() {
             sdl3.ReleaseCameraFrame(camera, frame)
             continue
         }
-        
-        y_plane : [^]u8 = cast([^]u8)frame.pixels
-
-        uv_plane : = &y_plane[frame.pitch * frame.h]
         
         width, height, channels : c.int
         decoded := image.load_from_memory(cast([^]u8)(frame.pixels), frame.pitch*frame.h, &width, &height, &channels, 4)
@@ -86,10 +77,7 @@ main :: proc() {
         }
         
         sdl3.UpdateTexture(video_texture, nil, decoded, width*4)
-        fmt.println("HERE!")
 
-        // sdl3.UpdateNVTexture(video_texture, nil, y_plane, frame.pitch, uv_plane, frame.pitch)
-        
         sdl3.RenderTexture(renderer, video_texture, nil, nil)
         sdl3.RenderPresent(renderer)
         sdl3.ReleaseCameraFrame(camera, frame)
