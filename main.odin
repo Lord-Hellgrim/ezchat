@@ -3,6 +3,7 @@ package ezchat
 
 import "core:fmt"
 import "core:c"
+import "core:crypto/noise"
 
 import "vendor:sdl3"
 import "vendor:stb/image"
@@ -68,9 +69,11 @@ main :: proc() {
             sdl3.ReleaseCameraFrame(camera, frame)
             continue
         }
+
+        fmt.println("Frame size: ", frame.pitch)
         
         width, height, channels : c.int
-        decoded := image.load_from_memory(cast([^]u8)(frame.pixels), frame.pitch*frame.h, &width, &height, &channels, 4)
+        decoded := image.load_from_memory(cast([^]u8)(frame.pixels), frame.pitch, &width, &height, &channels, 4)
         if decoded == nil {
             fmt.println("Decoding failed")
             return
