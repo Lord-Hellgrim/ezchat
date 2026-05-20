@@ -1,91 +1,100 @@
-package ezchat
+package main
 
 
+import "core:os"
 import "core:fmt"
-import "core:c"
-import "core:crypto/noise"
+import "core:time"
 
-import "vendor:sdl3"
-import "vendor:stb/image"
+
+when ODIN_OS == .Linux {
+    FFMPEG_COMMAND : string : "ffmpeg -f v4l2 -framerate 30 -video_size 640x480 -i /dev/video0 -c:v libx264 -preset ultrafast -tune zerolatency -f mpegts - | ./ezchat"
+} else when ODIN_OS == .Windows {
+    FFMPEG_COMMAND : string : "ffmpeg -f dshow -framerate 30 -video_size 640x480 -i video=\"Integrated Camera\" -c:v libx264 -preset ultrafast -tune zerolatency -f mpegts - | ezchat.exe"
+} else when ODIN_OS == .Darwin {
+    FFMPEG_COMMAND : string : "ffmpeg -f avfoundation -framerate 30 -video_size 640x480 -i \"0:0\" -c:v libx264 -preset ultrafast -tune zerolatency -f mpegts - | ./ezchat"
+}
+
+Read_Pipe :: distinct ^os.File
+Write_Pipe :: distinct ^os.File
+
+safe_pipe :: proc() -> (Read_Pipe, Write_Pipe, os.Error) {
+    read_pipe, write_pipe, pipe_status := os.pipe()
+
+    return Read_Pipe(read_pipe), Write_Pipe(write_pipe), pipe_status
+}
 
 main :: proc() {
+
+    read_pipe, write_pipe, pipe_status := os.pipe()
     
-    fmt.println("EZCHAT!!!")
+    if pipe_status != nil {
+        fmt.println("---------------------------")
+        fmt.println("Failed to open pipe because: ", pipe_status)
+        fmt.println("---------------------------")
+    }
+
+    ffmpeg_process_description := os.Process_Desc{
+        working_dir = "",
+        command = {
+            "ffmpeg",
+            "-f", "dshow",
+            "-framerate", "30",
+            "-video_size", "1280x720",
+            "-i", "video=Integrated Camera",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-f", "mpegts",
+            // "-loglevel quiet",
+            "pipe:1",
+        },
+        stdout = write_pipe,
+    }
+
+    ffmpeg_process, process_start_error := os.process_start(ffmpeg_process_description)
     
-    flags : sdl3.InitFlags = sdl3.InitFlags {.VIDEO, .AUDIO, .EVENTS, .CAMERA, .SENSOR, .JOYSTICK, .HAPTIC, .GAMEPAD} 
-
-    success := sdl3.Init(flags)
-    if !success {
-        fmt.println(sdl3.GetError())
+    defer {
+        fmt.println("DEFER CALLED!")
+        blech := os.process_kill(ffmpeg_process)
+        fmt.println("Blech_error: ", blech)
+    }
+    if process_start_error != nil {
+        fmt.println("---------------------------")
+        fmt.println("Failed to start ffmpeg process because: ", pipe_status)
+        fmt.println("---------------------------")
     }
 
-    count : c.int
-    cameras := sdl3.GetCameras(&count)
-    specs := sdl3.GetCameraSupportedFormats(cameras[0], &count)
-    // for i in 0..<count {
-    //     fmt.println(specs[i])
-    // }
-    spec := sdl3.CameraSpec{format = .MJPG, colorspace = .SRGB, width = 1280, height = 720, framerate_numerator = 30, framerate_denominator = 1}
-    camera := sdl3.OpenCamera(cameras[0], &spec)
-    if camera == nil {
-        fmt.println("Camera did not open")
-        return
+    fmt.println("ffmpeg_process: ", ffmpeg_process)
+
+    ffmpeg_data_buffer := make([]u8, 1500)
+    test_file, test_file_error := os.create("test_video.ts")
+    if test_file_error != nil {
+        fmt.println("-------------------")
+        fmt.println("Failed to create test_video file because: ", test_file_error)
+        fmt.println("-------------------")
     }
 
-    camera_permission := sdl3.GetCameraPermissionState(camera)
-    if camera_permission != .APPROVED {
-        fmt.println("Denied access to camera")
-        return
-    }
+    t : time.Stopwatch
+    time.stopwatch_start(&t)
+    fmt.println(t)
+    for time.stopwatch_duration(t) < 5 * time.Second{
+        has_data, data_error := os.pipe_has_data(read_pipe)
+        if has_data {
+            // fmt.println("Has data!")
+            bytes_read, read_status := os.read(read_pipe, ffmpeg_data_buffer)
+            x := bytes_read
+            os.write(test_file, ffmpeg_data_buffer[:bytes_read])
+            fmt.println("Bytes read: ", bytes_read)
 
-    actual_spec : sdl3.CameraSpec 
-    sdl3.GetCameraFormat(camera, &actual_spec)
-    fmt.println("Actual_spec: ", actual_spec)
-
-    window_flags := sdl3.WindowFlags {}
-    window := sdl3.CreateWindow("EzChat", spec.width, spec.height, window_flags)
-    
-    fmt.println(spec)
-    timestamp : u64
-    renderer := sdl3.CreateRenderer(window, nil)
-    video_texture := sdl3.CreateTexture(renderer, .ABGR8888, .STREAMING, spec.width, spec.height)
-    if video_texture == nil {
-        fmt.println("Video texture is nil")
-        return
-    }
-    for {
-        event : sdl3.Event
-        event_polled := sdl3.PollEvent(&event)
-        
-        if event.type == .QUIT {
-            return
+        } else if data_error == nil {
+            // fmt.println("No data available")
+        } else {
+            fmt.println("Error attempting to check for data: ", data_error)
         }
-        
-        frame := sdl3.AcquireCameraFrame(camera, &timestamp)
-        
-        sdl3.Delay(10)
-        if frame == nil {
-            fmt.println("Frame is nil")
-            sdl3.ReleaseCameraFrame(camera, frame)
-            continue
-        }
-
-        fmt.println("Frame size: ", frame.pitch)
-        
-        width, height, channels : c.int
-        decoded := image.load_from_memory(cast([^]u8)(frame.pixels), frame.pitch, &width, &height, &channels, 4)
-        if decoded == nil {
-            fmt.println("Decoding failed")
-            return
-        }
-        
-        sdl3.UpdateTexture(video_texture, nil, decoded, width*4)
-
-        sdl3.RenderTexture(renderer, video_texture, nil, nil)
-        sdl3.RenderPresent(renderer)
-        sdl3.ReleaseCameraFrame(camera, frame)
     }
 
     return
-    
 }
+
+
+//  ffmpeg -f dshow -framerate 30 -video_size 1280x720 -i video="Integrated Camera" -c:v libx264 -preset ultrafast -tune zerolatency -f mpegts -loglevel quiet pipe:1
